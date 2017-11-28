@@ -817,7 +817,7 @@ struct redisMemOverhead {
     size_t startup_allocated;
     size_t repl_backlog;
     size_t clients_slaves;
-    size_t clients_pubsub;
+    size_t clients_pubsubs;
     size_t clients_normal;
     size_t aof_buffer;
     size_t overhead_total;
