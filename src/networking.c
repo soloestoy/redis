@@ -816,6 +816,12 @@ void freeClient(client *c) {
     pubsubUnsubscribeAllPatterns(c,0);
     dictRelease(c->pubsub_channels);
     listRelease(c->pubsub_patterns);
+    if (c->flags & CLIENT_PUBSUB) {
+        c->flags &= ~CLIENT_PUBSUB;
+        ln = listSearchKey(server.pubsubs,c);
+        serverAssert(ln != NULL);
+        listDelNode(server.pubsubs,ln);
+    }
 
     /* Free data structures. */
     listRelease(c->reply);

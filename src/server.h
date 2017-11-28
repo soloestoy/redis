@@ -817,6 +817,7 @@ struct redisMemOverhead {
     size_t startup_allocated;
     size_t repl_backlog;
     size_t clients_slaves;
+    size_t clients_pubsub;
     size_t clients_normal;
     size_t aof_buffer;
     size_t overhead_total;
@@ -914,7 +915,7 @@ struct redisServer {
     list *clients;              /* List of active clients */
     list *clients_to_close;     /* Clients to close asynchronously */
     list *clients_pending_write; /* There is to write or install handler. */
-    list *slaves, *monitors;    /* List of slaves and MONITORs */
+    list *slaves, *monitors, *pubsubs;    /* List of slaves and MONITORs and pubsubs */
     client *current_client; /* Current client, only used on crash report */
     int clients_paused;         /* True if clients are currently paused */
     mstime_t clients_pause_end_time; /* Time when we undo clients_paused */

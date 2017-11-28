@@ -279,7 +279,10 @@ void subscribeCommand(client *c) {
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribeChannel(c,c->argv[j]);
-    c->flags |= CLIENT_PUBSUB;
+    if (!(c->flags & CLIENT_PUBSUB)) {
+        c->flags |= CLIENT_PUBSUB;
+        listAddNodeTail(server.pubsubs,c);
+    }
 }
 
 void unsubscribeCommand(client *c) {
@@ -291,7 +294,12 @@ void unsubscribeCommand(client *c) {
         for (j = 1; j < c->argc; j++)
             pubsubUnsubscribeChannel(c,c->argv[j],1);
     }
-    if (clientSubscriptionsCount(c) == 0) c->flags &= ~CLIENT_PUBSUB;
+    if (clientSubscriptionsCount(c) == 0 && c->flags & CLIENT_PUBSUB) {
+        c->flags &= ~CLIENT_PUBSUB;
+        listNode *ln = listSearchKey(server.pubsubs,c);
+        serverAssert(ln != NULL);
+        listDelNode(server.pubsubs,ln);
+    }
 }
 
 void psubscribeCommand(client *c) {
@@ -299,7 +307,10 @@ void psubscribeCommand(client *c) {
 
     for (j = 1; j < c->argc; j++)
         pubsubSubscribePattern(c,c->argv[j]);
-    c->flags |= CLIENT_PUBSUB;
+    if (!(c->flags & CLIENT_PUBSUB)) {
+        c->flags |= CLIENT_PUBSUB;
+        listAddNodeTail(server.pubsubs,c);
+    }
 }
 
 void punsubscribeCommand(client *c) {
@@ -311,7 +322,12 @@ void punsubscribeCommand(client *c) {
         for (j = 1; j < c->argc; j++)
             pubsubUnsubscribePattern(c,c->argv[j],1);
     }
-    if (clientSubscriptionsCount(c) == 0) c->flags &= ~CLIENT_PUBSUB;
+    if (clientSubscriptionsCount(c) == 0 && c->flags & CLIENT_PUBSUB) {
+        c->flags &= ~CLIENT_PUBSUB;
+        listNode *ln = listSearchKey(server.pubsubs,c);
+        serverAssert(ln != NULL);
+        listDelNode(server.pubsubs,ln);
+    }
 }
 
 void publishCommand(client *c) {
