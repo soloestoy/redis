@@ -90,6 +90,7 @@ typedef struct _client {
     size_t written;         /* Bytes of 'obuf' already written */
     long long start;        /* Start time of a request */
     long long latency;      /* Request latency */
+    int initialized;        /* If non-zero, it means the client is already initialized */
     int pending;            /* Number of pending requests (replies to consume) */
     int prefix_pending;     /* If non-zero, number of pending prefix commands. Commands
                                such as auth and select are prefixed to the pipeline of
@@ -151,6 +152,7 @@ static void resetClient(client c) {
     aeDeleteFileEvent(config.el,c->context->fd,AE_READABLE);
     aeCreateFileEvent(config.el,c->context->fd,AE_WRITABLE,writeHandler,c);
     c->written = 0;
+    c->initialized = 0;
     c->pending = config.pipeline;
 }
 
@@ -261,8 +263,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(fd);
     UNUSED(mask);
 
-    /* Initialize request when nothing was written. */
-    if (c->written == 0) {
+    /* Initialize request. */
+    if (c->initialized == 0) {
         /* Enforce upper bound to number of requests. */
         if (config.requests_issued++ >= config.requests) {
             freeClient(c);
@@ -273,6 +275,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (config.randomkeys) randomizeClientKey(c);
         c->start = ustime();
         c->latency = -1;
+        c->initialized = 1;
     }
 
     if (sdslen(c->obuf) > c->written) {
@@ -370,6 +373,7 @@ static client createClient(char *cmd, size_t len, client from) {
     }
 
     c->written = 0;
+    c->initialized = 0;
     c->pending = config.pipeline+c->prefix_pending;
     c->randptr = NULL;
     c->randlen = 0;
