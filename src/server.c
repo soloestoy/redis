@@ -1532,6 +1532,7 @@ void initServerConfig(void) {
     server.execCommand = lookupCommandByCString("exec");
     server.expireCommand = lookupCommandByCString("expire");
     server.pexpireCommand = lookupCommandByCString("pexpire");
+    server.scriptCommand = lookupCommandByCString("script");
 
     /* Slow log */
     server.slowlog_log_slower_than = CONFIG_DEFAULT_SLOWLOG_LOG_SLOWER_THAN;
@@ -1984,7 +1985,6 @@ void initServer(void) {
     }
 
     if (server.cluster_enabled) clusterInit();
-    replicationScriptCacheInit();
     scriptingInit(1);
     slowlogInit();
     latencyMonitorInit();
