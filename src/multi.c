@@ -335,12 +335,10 @@ void watchCommand(client *c) {
         addReplyError(c,"WATCH inside MULTI is not allowed");
         return;
     }
-    if (c->flags & CLIENT_DIRTY_CAS)
-        goto watch_done;
-    for (j = 1; j < c->argc; j++)
-        watchForKey(c,c->argv[j]);
-
-watch_done:
+    if (!(c->flags & CLIENT_DIRTY_CAS)) {
+        for (j = 1; j < c->argc; j++)
+            watchForKey(c,c->argv[j]);
+    }
     addReply(c,shared.ok);
 }
 
