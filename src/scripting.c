@@ -479,6 +479,22 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         goto cleanup;
     }
 
+    /* If we reached the memory limit configured via maxmemory, commands that
+     * could enlarge the memory usage are not allowed, but only if this is the
+     * first write in the context of this script, otherwise we can't stop
+     * in the middle. */
+    if (server.maxmemory && server.lua_write_dirty == 0 &&
+        (cmd->flags & CMD_DENYOOM))
+    {
+        if (freeMemoryIfNeeded() == C_ERR) {
+            luaPushError(lua, shared.oomerr->ptr);
+            goto cleanup;
+        }
+    }
+
+    if (cmd->flags & CMD_RANDOM) server.lua_random_dirty = 1;
+    if (cmd->flags & CMD_WRITE) server.lua_write_dirty = 1;
+
     /* Write commands are forbidden against read-only slaves, or if a
      * command marked as non-deterministic was already called in the context
      * of this script. */
@@ -501,22 +517,6 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
             goto cleanup;
         }
     }
-
-    /* If we reached the memory limit configured via maxmemory, commands that
-     * could enlarge the memory usage are not allowed, but only if this is the
-     * first write in the context of this script, otherwise we can't stop
-     * in the middle. */
-    if (server.maxmemory && server.lua_write_dirty == 0 &&
-        (cmd->flags & CMD_DENYOOM))
-    {
-        if (freeMemoryIfNeeded() == C_ERR) {
-            luaPushError(lua, shared.oomerr->ptr);
-            goto cleanup;
-        }
-    }
-
-    if (cmd->flags & CMD_RANDOM) server.lua_random_dirty = 1;
-    if (cmd->flags & CMD_WRITE) server.lua_write_dirty = 1;
 
     /* If this is a Redis Cluster node, we need to make sure Lua is not
      * trying to access non-local keys, with the exception of commands
