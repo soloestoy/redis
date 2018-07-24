@@ -543,6 +543,7 @@ int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
             /* Get the master fields count. */
             si->lp = si->ri.data;
             si->lp_ele = lpFirst(si->lp);           /* Seek items count */
+            si->lp_entries = lpGetInteger(si->lp_ele);
             si->lp_ele = lpNext(si->lp,si->lp_ele); /* Seek deleted count. */
             si->lp_ele = lpNext(si->lp,si->lp_ele); /* Seek num fields. */
             si->master_fields_count = lpGetInteger(si->lp_ele);
@@ -555,6 +556,19 @@ int streamIteratorGetID(streamIterator *si, streamID *id, int64_t *numfields) {
              * we are iterating in reverse order, we need to seek the
              * end of the listpack. */
             if (si->rev) si->lp_ele = lpLast(si->lp);
+
+            unsigned char *tmp = NULL;
+            si->last_id.ms = si->master_id.ms;
+            si->last_id.seq = si->master_id.seq;
+            tmp = lpLast(si->lp);
+            int64_t lp_count = lpGetInteger(tmp);
+            if (lp_count) {
+                lp_count--;
+                while(lp_count--) tmp = lpPrev(si->lp,tmp);
+                si->last_id.ms += lpGetInteger(tmp);
+                tmp = lpNext(si->lp,tmp);
+                id->seq += lpGetInteger(tmp);
+            }
         } else if (si->rev) {
             /* If we are itereating in the reverse order, and this is not
              * the first entry emitted for this listpack, then we already
@@ -757,6 +771,33 @@ int streamDeleteItem(stream *s, streamID *id) {
         streamIteratorRemoveEntry(&si,&myid);
         deleted = 1;
     }
+    return deleted;
+}
+
+/* Delete entries from start to end in the stream, Returns the number
+ * of items actually deleted. */
+int streamDeleteRange(stream *s, streamID *start, streamID *end) {
+    if (streamCompareID(start,end) > 0) return 0;
+
+    int deleted = 0;
+    streamIterator si;
+    streamIteratorStart(&si,s,start,end,0);
+    streamID myid;
+    int64_t numfields;
+    while(streamIteratorGetID(&si,&myid,&numfields)) {
+        if (streamCompareID(&myid,&si.master_id) <= 0 && streamCompareID(&si.last_id,end) <= 0) {
+            lpFree(si.lp);
+            raxRemove(s->rax,si.ri.key,si.ri.key_len,NULL);
+            deleted += si.lp_entries;
+            s->length -= deleted;
+            streamIteratorStop(&si);
+            streamIteratorStart(&si,s,&myid,end,0);
+        } else {
+            streamIteratorRemoveEntry(&si,&myid);
+            deleted++;
+        }
+    }
+    streamIteratorStop(&si);
     return deleted;
 }
 
@@ -2140,6 +2181,32 @@ void xdelCommand(client *c) {
     signalModifiedKey(c->db,c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STREAM,"xdel",c->argv[1],c->db->id);
     server.dirty += deleted;
+    addReplyLongLong(c,deleted);
+}
+
+/* XDELRANGE key start end
+ *
+ * Removes entries from start to end in the stream. Returns the number
+ * of items actually deleted. */
+void xdelrangeCommand(client *c) {
+    robj *o;
+
+    if ((o = lookupKeyWriteOrReply(c,c->argv[1],shared.czero)) == NULL
+        || checkType(c,o,OBJ_STREAM)) return;
+    stream *s = o->ptr;
+
+    streamID startid, endid;
+    if (streamParseIDOrReply(c,c->argv[2],&startid,0) == C_ERR) return;
+    if (streamParseIDOrReply(c,c->argv[3],&endid,UINT64_MAX) == C_ERR) return;
+
+    /* Actually apply the command. */
+    int deleted = streamDeleteRange(s,&startid,&endid);
+
+    if (deleted) {
+        signalModifiedKey(c->db,c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STREAM,"xdelrange",c->argv[1],c->db->id);
+        server.dirty += deleted;
+    }
     addReplyLongLong(c,deleted);
 }
 

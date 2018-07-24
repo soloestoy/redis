@@ -29,7 +29,10 @@ typedef struct stream {
 typedef struct streamIterator {
     stream *stream;         /* The stream we are iterating. */
     streamID master_id;     /* ID of the master entry at listpack head. */
+    streamID last_id;       /* ID of the last entry at listpack tail, note
+                             * that this entry may be with deleted flag. */
     uint64_t master_fields_count;       /* Master entries # of fields. */
+    uint64_t lp_entries;                /* Current listpack entries count. */
     unsigned char *master_fields_start; /* Master entries start in listpack. */
     unsigned char *master_fields_ptr;   /* Master field to emit next. */
     int entry_flags;                    /* Flags of entry we are emitting. */
