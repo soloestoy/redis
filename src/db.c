@@ -523,7 +523,11 @@ void keysCommand(client *c) {
     unsigned long numkeys = 0;
     void *replylen = addDeferredMultiBulkLength(c);
 
-    di = dictGetSafeIterator(c->db->dict);
+    if (tolower(((char*)c->argv[0]->ptr)[0]) == 'e') {
+        di = dictGetSafeIterator(c->db->expires);
+    } else {
+        di = dictGetSafeIterator(c->db->dict);
+    }
     allkeys = (pattern[0] == '*' && pattern[1] == '\0');
     while((de = dictNext(di)) != NULL) {
         sds key = dictGetKey(de);
@@ -662,7 +666,11 @@ void scanGenericCommand(client *c, robj *o, unsigned long cursor) {
     /* Handle the case of a hash table. */
     ht = NULL;
     if (o == NULL) {
-        ht = c->db->dict;
+        if (tolower(((char*)c->argv[0]->ptr)[0]) == 'e') {
+            ht = c->db->expires;
+        } else {
+            ht = c->db->dict;
+        }
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HT) {
         ht = o->ptr;
     } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HT) {
