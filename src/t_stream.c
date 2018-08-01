@@ -768,6 +768,24 @@ int streamDeleteItem(stream *s, streamID *id) {
     return deleted;
 }
 
+/* Delete entries from start to end in the stream, Returns the number
+ * of items actually deleted. */
+int streamDeleteRange(stream *s, streamID *start, streamID *end) {
+    if (streamCompareID(start,end) > 0) return 0;
+
+    int deleted = 0;
+    streamIterator si;
+    streamIteratorStart(&si,s,start,end,0);
+    streamID myid;
+    int64_t numfields;
+    while(streamIteratorGetID(&si,&myid,&numfields)) {
+        streamIteratorRemoveEntry(&si,&myid);
+        deleted++;
+    }
+    streamIteratorStop(&si);
+    return deleted;
+}
+
 /* Emit a reply in the client output buffer by formatting a Stream ID
  * in the standard <ms>-<seq> format, using the simple string protocol
  * of REPL. */
@@ -2173,6 +2191,32 @@ void xdelCommand(client *c) {
     if (deleted) {
         signalModifiedKey(c->db,c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STREAM,"xdel",c->argv[1],c->db->id);
+        server.dirty += deleted;
+    }
+    addReplyLongLong(c,deleted);
+}
+
+/* XDELRANGE key start end
+ *
+ * Removes entries from start to end in the stream. Returns the number
+ * of items actually deleted. */
+void xdelrangeCommand(client *c) {
+    robj *o;
+
+    if ((o = lookupKeyWriteOrReply(c,c->argv[1],shared.czero)) == NULL
+        || checkType(c,o,OBJ_STREAM)) return;
+    stream *s = o->ptr;
+
+    streamID startid, endid;
+    if (streamParseIDOrReply(c,c->argv[2],&startid,0) == C_ERR) return;
+    if (streamParseIDOrReply(c,c->argv[3],&endid,UINT64_MAX) == C_ERR) return;
+
+    /* Actually apply the command. */
+    int deleted = streamDeleteRange(s,&startid,&endid);
+
+    if (deleted) {
+        signalModifiedKey(c->db,c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_STREAM,"xdelrange",c->argv[1],c->db->id);
         server.dirty += deleted;
     }
     addReplyLongLong(c,deleted);

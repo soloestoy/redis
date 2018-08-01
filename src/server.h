@@ -2103,6 +2103,7 @@ void xpendingCommand(client *c);
 void xclaimCommand(client *c);
 void xinfoCommand(client *c);
 void xdelCommand(client *c);
+void xdelrangeCommand(client *c);
 void xtrimCommand(client *c);
 
 #if defined(__GNUC__)
