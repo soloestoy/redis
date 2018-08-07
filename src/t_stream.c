@@ -770,19 +770,110 @@ int streamDeleteItem(stream *s, streamID *id) {
 
 /* Delete entries from start to end in the stream, Returns the number
  * of items actually deleted. */
-int streamDeleteRange(stream *s, streamID *start, streamID *end) {
+int64_t streamDeleteRange(stream *s, streamID *start, streamID *end) {
     if (streamCompareID(start,end) > 0) return 0;
 
-    int deleted = 0;
-    streamIterator si;
-    streamIteratorStart(&si,s,start,end,0);
-    streamID myid;
-    int64_t numfields;
-    while(streamIteratorGetID(&si,&myid,&numfields)) {
-        streamIteratorRemoveEntry(&si,&myid);
-        deleted++;
+    int64_t deleted = 0;
+    unsigned char buf[sizeof(streamID)];
+    streamEncodeID(buf,start);
+
+    raxIterator ri;
+    raxStart(&ri,s->rax);
+    raxSeek(&ri,"<=",buf,sizeof(streamID));
+    if (raxEOF(&ri)) raxSeek(&ri,"^",NULL,0);
+
+    while (raxNext(&ri)) {
+        streamID master_id;
+        streamDecodeID(ri.key,&master_id);
+        streamID last_id = master_id;
+        unsigned char *lp = ri.data, *p = lpFirst(lp);
+        int64_t entries = lpGetInteger(p);
+        unsigned char *last = lpLast(lp);
+        int64_t lp_count = lpGetInteger(last);
+        if (lp_count) {
+            /* Just go back to entry-id, not flags. */
+            lp_count--;
+            while(lp_count--) last = lpPrev(lp,last);
+            last_id.ms += lpGetInteger(last);
+            last = lpNext(lp,last);
+            last_id.seq += lpGetInteger(last);
+        }
+
+        /* We use "master_id <= start" to seek listpack, so just skip it if start > last_id. */
+        if (streamCompareID(start,&last_id) > 0) continue;
+
+        /* If start <= master_id and last_id <= end, we can remove the whole listpack. */
+        if (streamCompareID(start,&master_id) <= 0 && streamCompareID(&last_id,end) <= 0) {
+            lpFree(lp);
+            raxRemove(s->rax,ri.key,ri.key_len,NULL);
+            raxSeek(&ri,">=",ri.key,ri.key_len);
+            deleted += entries;
+            s->length -= entries;
+        } else {
+            int64_t partial_deleted = 0;
+            p = lpNext(lp,p); /* Seek deleted count. */
+            int64_t marked_deleted = lpGetInteger(p);
+            p = lpNext(lp,p); /* Seek num fields. */
+            int64_t master_fields_count = lpGetInteger(p);
+            p = lpNext(lp,p); /* Seek the first field. */
+            for (int64_t i = 0; i < master_fields_count; i++)
+                p = lpNext(lp,p);
+            p = lpNext(lp,p); /* Skip the zero master entry terminator. */
+
+            while (p) {
+                streamID current_id = master_id;
+                int flags = lpGetInteger(p);
+                unsigned char *flags_p = p;
+                int to_skip;
+
+                p = lpNext(lp,p); /* Skip ID ms delta. */
+                current_id.ms += lpGetInteger(p);
+                p = lpNext(lp,p); /* Skip ID seq delta. */
+                current_id.seq += lpGetInteger(p);
+
+                if (streamCompareID(&current_id,end) > 0) break;
+
+                /* Mark the entry as deleted. */
+                if (streamCompareID(&current_id,start) >= 0 && !(flags & STREAM_ITEM_FLAG_DELETED)) {
+                    flags |= STREAM_ITEM_FLAG_DELETED;
+                    lp = lpReplaceInteger(lp,&flags_p,flags);
+                    p = lpNext(lp,flags_p);
+                    p = lpNext(lp,p);
+                    partial_deleted++;
+                }
+
+                p = lpNext(lp,p); /* Seek num-fields or values (if compressed). */
+                if (flags & STREAM_ITEM_FLAG_SAMEFIELDS) {
+                    to_skip = master_fields_count;
+                } else {
+                    to_skip = lpGetInteger(p);
+                    to_skip = 1+(to_skip*2);
+                }
+
+                while(to_skip--) p = lpNext(lp,p); /* Skip the whole entry. */
+                p = lpNext(lp,p); /* Skip the final lp-count field. */
+            }
+
+            entries -= partial_deleted;
+            marked_deleted += partial_deleted;
+
+            p = lpFirst(lp);
+            lp = lpReplaceInteger(lp,&p,entries);
+            p = lpNext(lp,p); /* Seek deleted field. */
+            lp = lpReplaceInteger(lp,&p,marked_deleted);
+
+            if (entries + marked_deleted > 10 && marked_deleted > entries/2) {
+                /* TODO: perform a garbage collection. */
+            }
+
+            deleted += partial_deleted;
+            s->length -= partial_deleted;
+
+            /* Update the listpack with the new pointer. */
+            raxInsert(s->rax,ri.key,ri.key_len,lp,NULL);
+        }
     }
-    streamIteratorStop(&si);
+
     return deleted;
 }
 
@@ -2212,7 +2303,7 @@ void xdelrangeCommand(client *c) {
     if (streamParseIDOrReply(c,c->argv[3],&endid,UINT64_MAX) == C_ERR) return;
 
     /* Actually apply the command. */
-    int deleted = streamDeleteRange(s,&startid,&endid);
+    int64_t deleted = streamDeleteRange(s,&startid,&endid);
 
     if (deleted) {
         signalModifiedKey(c->db,c->argv[1]);
