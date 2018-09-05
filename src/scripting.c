@@ -1493,8 +1493,15 @@ NULL
     } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"load")) {
         sds sha = luaCreateFunction(c,server.lua,c->argv[2]);
         if (sha == NULL) return; /* The error was sent by luaCreateFunction(). */
-        if (!replicationScriptCacheExists(sha)) {
-            /* Propagate the script only when it isn't in script cache,
+        if (!replicationScriptCacheExists(sha) &&
+            (!server.masterhost || c->flags & CLIENT_MASTER)) {
+            /* If we are a master or SCRIPT LOAD comes from master, we
+             * will propagate the script and add it into script cache,
+             * or it would break the consistency of Lua state.
+             *
+             * It means that user SCRIPT LOAD on slave only affect itself.
+             *
+             * Propagate the script only when it isn't in script cache,
              * thus we can save our IO and bandwidth.
              *
              * And then add it into the script cache, as from now on
