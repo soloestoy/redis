@@ -1424,18 +1424,25 @@ void evalGenericCommand(client *c, int evalsha) {
      * flush our cache of scripts that can be replicated as EVALSHA, while
      * for AOF we need to do so every time we rewrite the AOF file. */
     if (evalsha && !server.lua_replicate_commands) {
-        if (!replicationScriptCacheExists(c->argv[1]->ptr)) {
-            /* This script is not in our script cache, replicate it as
-             * EVAL, then add it into the script cache, as from now on
-             * slaves and AOF know about it. */
+        if (!server.masterhost && !replicationScriptCacheExists(c->argv[1]->ptr)) {
+            /* This script is not in master's script cache, propagate it
+             * by SCRIPT LOAD at first, then add it into the script cache,
+             * as from now on slaves and AOF know about it.
+             * Slave should not affect script cache. */
             robj *script = dictFetchValue(server.lua_scripts,c->argv[1]->ptr);
 
-            replicationScriptCacheAdd(c->argv[1]->ptr);
             serverAssertWithInfo(c,NULL,script != NULL);
-            rewriteClientCommandArgument(c,0,
-                resetRefCount(createStringObject("EVAL",4)));
-            rewriteClientCommandArgument(c,1,script);
-            forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
+
+            robj *tmpargv[3];
+            tmpargv[0] = createStringObject("SCRIPT",6);
+            tmpargv[1] = createStringObject("LOAD",4);
+            tmpargv[2] = script;
+            propagate(server.scriptCommand,c->db->id,tmpargv,3,
+                      PROPAGATE_AOF|PROPAGATE_REPL);
+            decrRefCount(tmpargv[0]);
+            decrRefCount(tmpargv[1]);
+
+            replicationScriptCacheAdd(c->argv[1]->ptr);
         }
     }
 }
