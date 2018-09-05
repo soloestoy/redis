@@ -1493,8 +1493,20 @@ NULL
     } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr,"load")) {
         sds sha = luaCreateFunction(c,server.lua,c->argv[2]);
         if (sha == NULL) return; /* The error was sent by luaCreateFunction(). */
+        if (!replicationScriptCacheExists(sha)) {
+            /* Propagate the script only when it isn't in script cache,
+             * thus we can save our IO and bandwidth.
+             *
+             * And then add it into the script cache, as from now on
+             * slaves and AOF know about it.
+             *
+             * Moreover, if the script is read-only, after this when
+             * we execute EVALSHA, we don't need to rewrite EVALSHA
+             * as EVAL and propagate the script. */
+            forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
+            replicationScriptCacheAdd(sha);
+        }
         addReplyBulkCBuffer(c,sha,40);
-        forceCommandPropagation(c,PROPAGATE_REPL|PROPAGATE_AOF);
     } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr,"kill")) {
         if (server.lua_caller == NULL) {
             addReplySds(c,sdsnew("-NOTBUSY No scripts in execution right now.\r\n"));
