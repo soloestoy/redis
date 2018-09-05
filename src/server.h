@@ -1876,6 +1876,7 @@ int redis_check_aof_main(int argc, char **argv);
 
 /* Scripting */
 void scriptingInit(int setup);
+void scriptingReset(void);
 int ldbRemoveChild(pid_t pid);
 void ldbKillForkedSessions(void);
 int ldbPendingChildren(void);

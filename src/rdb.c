@@ -1162,10 +1162,11 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
      * the script cache as well: on successful PSYNC after a restart, we need
      * to be able to process any EVALSHA inside the replication backlog the
      * master will send us. */
-    if (rsi && dictSize(server.lua_scripts)) {
-        di = dictGetIterator(server.lua_scripts);
+    if (rsi && dictSize(server.repl_scriptcache_dict)) {
+        di = dictGetIterator(server.repl_scriptcache_dict);
         while((de = dictNext(di)) != NULL) {
-            robj *body = dictGetVal(de);
+            dictEntry *temp_de = dictFind(server.lua_scripts,dictGetKey(de));
+            robj *body = dictGetVal(temp_de);
             if (rdbSaveAuxField(rdb,"lua",3,body->ptr,sdslen(body->ptr)) == -1)
                 goto werr;
         }
@@ -1955,11 +1956,13 @@ int rdbLoadRio(rio *rdb, rdbSaveInfo *rsi, int loading_aof) {
                 if (rsi) rsi->repl_offset = strtoll(auxval->ptr,NULL,10);
             } else if (!strcasecmp(auxkey->ptr,"lua")) {
                 /* Load the script back in memory. */
-                if (luaCreateFunction(NULL,server.lua,auxval) == NULL) {
+                sds sha = luaCreateFunction(NULL,server.lua,auxval);
+                if (!sha) {
                     rdbExitReportCorruptRDB(
                         "Can't load Lua script from RDB file! "
                         "BODY: %s", auxval->ptr);
                 }
+                replicationScriptCacheAdd(sha);
             } else {
                 /* We ignore fields we don't understand, as by AUX field
                  * contract. */
