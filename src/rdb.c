@@ -1165,8 +1165,7 @@ int rdbSaveRio(rio *rdb, int *error, int flags, rdbSaveInfo *rsi) {
     if (rsi && dictSize(server.repl_scriptcache_dict)) {
         di = dictGetIterator(server.repl_scriptcache_dict);
         while((de = dictNext(di)) != NULL) {
-            dictEntry *temp_de = dictFind(server.lua_scripts,dictGetKey(de));
-            robj *body = dictGetVal(temp_de);
+            robj *body = dictGetVal(de);
             if (rdbSaveAuxField(rdb,"lua",3,body->ptr,sdslen(body->ptr)) == -1)
                 goto werr;
         }

@@ -2272,19 +2272,13 @@ void refreshGoodSlavesCount(void) {
  * translating it to EVAL every time it is possible.
  *
  * We use a capped collection implemented by a hash table for fast lookup
- * of scripts we can send as EVALSHA, plus a linked list that is used for
- * eviction of the oldest entry when the max number of items is reached.
- *
- * We don't care about taking a different cache for every different slave
- * since to fill the cache again is not very costly, the goal of this code
- * is to avoid that the same big script is trasmitted a big number of times
- * per second wasting bandwidth and processor speed, but it is not a problem
- * if we need to rebuild the cache from scratch from time to time, every used
- * script will need to be transmitted a single time to reappear in the cache.
+ * of scripts we can send as EVALSHA, the dict is just a mirror of dict
+ * server.lua_scripts.
  *
  * This is how the system works:
  *
- * 1) Every time a new slave connects, we flush the whole script cache.
+ * 1) Every time a new slave connects, we persist all scipts in script cache,
+ *    thus after full resync slave can have the same state with master.
  * 2) We only send as EVALSHA what was sent to the master as EVALSHA, without
  *    trying to convert EVAL into EVALSHA specifically for slaves.
  * 3) Every time we trasmit a script as EVAL to the slaves, we also add the
@@ -2292,56 +2286,36 @@ void refreshGoodSlavesCount(void) {
  *    slave knows about the script starting from now.
  * 4) On SCRIPT FLUSH command, we replicate the command to all the slaves
  *    and at the same time flush the script cache.
- * 5) When the last slave disconnects, flush the cache.
- * 6) We handle SCRIPT LOAD as well since that's how scripts are loaded
+ * 5) We handle SCRIPT LOAD as well since that's how scripts are loaded
  *    in the master sometimes.
  */
 
 /* Initialize the script cache, only called at startup. */
 void replicationScriptCacheInit(void) {
-    server.repl_scriptcache_size = 10000;
     server.repl_scriptcache_dict = dictCreate(&replScriptCacheDictType,NULL);
-    server.repl_scriptcache_fifo = listCreate();
 }
 
-/* Empty the script cache. Should be called every time we are no longer sure
- * that every slave knows about all the scripts in our set, or when the
- * current AOF "context" is no longer aware of the script. In general we
- * should flush the cache:
+/* Empty the script cache. In general we should flush the cache:
  *
- * 1) Every time a new slave reconnects to this master and performs a
- *    full SYNC (PSYNC does not require flushing).
- * 2) Every time an AOF rewrite is performed.
- * 3) Every time we are left without slaves at all, and AOF is off, in order
- *    to reclaim otherwise unused memory.
+ * 1) Every time a slave reconnects to it's master and performs a
+ *    full SYNC (PSYNC does not require flushing) and need emptyDb.
+ * 2) Command SCRIPT FLUSH.
  */
 void replicationScriptCacheFlush(void) {
     dictEmpty(server.repl_scriptcache_dict,NULL);
-    listRelease(server.repl_scriptcache_fifo);
-    server.repl_scriptcache_fifo = listCreate();
 }
 
-/* Add an entry into the script cache, if we reach max number of entries the
- * oldest is removed from the list. */
+/* Add an entry into the script cache. */
 void replicationScriptCacheAdd(sds sha1) {
-    int retval;
-    sds key = sdsdup(sha1);
-
-    /* Evict oldest. */
-    if (listLength(server.repl_scriptcache_fifo) == server.repl_scriptcache_size)
-    {
-        listNode *ln = listLast(server.repl_scriptcache_fifo);
-        sds oldest = listNodeValue(ln);
-
-        retval = dictDelete(server.repl_scriptcache_dict,oldest);
-        serverAssert(retval == DICT_OK);
-        listDelNode(server.repl_scriptcache_fifo,ln);
-    }
+    dictEntry *de = dictFind(server.lua_scripts,sha1);
+    serverAssert(de != NULL);
 
     /* Add current. */
-    retval = dictAdd(server.repl_scriptcache_dict,key,NULL);
-    listAddNodeHead(server.repl_scriptcache_fifo,key);
+    sds key = dictGetKey(de);
+    robj *body = dictGetVal(de);
+    int retval = dictAdd(server.repl_scriptcache_dict,key,body);
     serverAssert(retval == DICT_OK);
+    incrRefCount(body);
 }
 
 /* Returns non-zero if the specified entry exists inside the cache, that is,

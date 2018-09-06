@@ -713,15 +713,15 @@ dictType migrateCacheDictType = {
 };
 
 /* Replication cached script dict (server.repl_scriptcache_dict).
- * Keys are sds SHA1 strings, while values are not used at all in the current
- * implementation. */
+ * Key points to SHA1 strings in server.lua_scripts, while value
+ * is script body robj in server.lua_scripts. */
 dictType replScriptCacheDictType = {
     dictSdsCaseHash,            /* hash function */
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictSdsKeyCaseCompare,      /* key compare */
-    dictSdsDestructor,          /* key destructor */
-    NULL                        /* val destructor */
+    NULL,                       /* key destructor */
+    dictObjectDestructor        /* val destructor */
 };
 
 int htNeedsResize(dict *dict) {
