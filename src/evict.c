@@ -150,6 +150,31 @@ void evictionPoolAlloc(void) {
     EvictionPoolLRU = ep;
 }
 
+unsigned long long getIdleTime(robj *o, dictEntry *de) {
+    unsigned long long idle;
+    /* Calculate the idle time according to the policy. This is called
+     * idle just because the code initially handled LRU, but is in fact
+     * just a score where an higher score means better candidate. */
+    if (server.maxmemory_policy & MAXMEMORY_FLAG_LRU) {
+        idle = estimateObjectIdleTime(o);
+    } else if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+        /* When we use an LRU policy, we sort the keys by idle time
+         * so that we expire keys starting from greater idle time.
+         * However when the policy is an LFU one, we have a frequency
+         * estimation, and we want to evict keys with lower frequency
+         * first. So inside the pool we put objects using the inverted
+         * frequency subtracting the actual frequency to the maximum
+         * frequency of 255. */
+        idle = 255-LFUDecrAndReturn(o);
+    } else if (server.maxmemory_policy == MAXMEMORY_VOLATILE_TTL) {
+        /* In this case the sooner the expire the better. */
+        idle = ULLONG_MAX - (long)dictGetVal(de);
+    } else {
+        serverPanic("Unknown eviction policy in evictionPoolPopulate()");
+    }
+    return idle;
+}
+
 /* This is an helper function for freeMemoryIfNeeded(), it is used in order
  * to populate the evictionPool with a few entries every time we want to
  * expire a key. Keys with idle time smaller than one of the current
@@ -158,7 +183,6 @@ void evictionPoolAlloc(void) {
  * We insert keys on place in ascending order, so keys with the smaller
  * idle time are on the left, and keys with the higher idle time on the
  * right. */
-
 void evictionPoolPopulate(int dbid, dict *sampledict, dict *keydict, struct evictionPoolEntry *pool) {
     int j, k, count;
     dictEntry *samples[server.maxmemory_samples];
@@ -501,6 +525,7 @@ int freeMemoryIfNeeded(void) {
                 for (k = EVPOOL_SIZE-1; k >= 0; k--) {
                     if (pool[k].key == NULL) continue;
                     bestdbid = pool[k].dbid;
+                    robj *o;
 
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
                         de = dictFind(server.db[pool[k].dbid].dict,
@@ -519,8 +544,24 @@ int freeMemoryIfNeeded(void) {
                     /* If the key exists, is our pick. Otherwise it is
                      * a ghost and we need to try the next element. */
                     if (de) {
-                        bestkey = dictGetKey(de);
-                        break;
+                        if (k) {
+                            if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
+                                o = dictGetVal(de);
+                            } else {
+                                de = dictFind(server.db[bestdbid].dict, dictGetKey(de));
+                                o = dictGetVal(de);
+                            }
+                            unsigned long long idle = getIdleTime(o, de);
+                            if (idle >= pool[k-1].idle) {
+                                bestkey = dictGetKey(de);
+                                break;
+                            } else {
+                                /* This an old bestkey, not we want. */
+                            }
+                        } else {
+                            bestkey = dictGetKey(de);
+                            break;
+                        }
                     } else {
                         /* Ghost... Iterate again. */
                     }

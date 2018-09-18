@@ -60,7 +60,7 @@ void aofClosePipes(void);
 #define AOF_RW_BUF_BLOCK_SIZE (1024*1024*10)    /* 10 MB per block */
 
 typedef struct aofrwblock {
-    unsigned long used, free;
+    unsigned long used, free, pos;
     char buf[AOF_RW_BUF_BLOCK_SIZE];
 } aofrwblock;
 
@@ -100,25 +100,25 @@ void aofChildWriteDiffData(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(fd);
     UNUSED(privdata);
     UNUSED(mask);
-
+long long start = ustime();
     while(1) {
         ln = listFirst(server.aof_rewrite_buf_blocks);
         block = ln ? ln->value : NULL;
         if (server.aof_stop_sending_diff || !block) {
             aeDeleteFileEvent(server.el,server.aof_pipe_write_data_to_child,
                               AE_WRITABLE);
-            return;
+            break;
         }
-        if (block->used > 0) {
+        if (block->pos != block->used) {
             nwritten = write(server.aof_pipe_write_data_to_child,
-                             block->buf,block->used);
-            if (nwritten <= 0) return;
-            memmove(block->buf,block->buf+nwritten,block->used-nwritten);
-            block->used -= nwritten;
-            block->free += nwritten;
+                             block->buf+block->pos,block->used-block->pos);
+            if (nwritten <= 0) break;
+            block->pos += nwritten;
         }
-        if (block->used == 0) listDelNode(server.aof_rewrite_buf_blocks,ln);
+        if (block->used == block->pos) listDelNode(server.aof_rewrite_buf_blocks,ln);
     }
+long long end = ustime();
+if (end-start > 1000) printf("aofChildWriteDiffData: %lld us\n",end-start);
 }
 
 /* Append data to the AOF rewrite buffer, allocating new blocks if needed. */
@@ -146,6 +146,7 @@ void aofRewriteBufferAppend(unsigned char *s, unsigned long len) {
             block = zmalloc(sizeof(*block));
             block->free = AOF_RW_BUF_BLOCK_SIZE;
             block->used = 0;
+            block->pos = 0;
             listAddNodeTail(server.aof_rewrite_buf_blocks,block);
 
             /* Log every time we cross more 10 or 100 blocks, respectively
