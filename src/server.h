@@ -851,6 +851,7 @@ struct redisMemOverhead {
     size_t peak_allocated;
     size_t total_allocated;
     size_t startup_allocated;
+    size_t evictionpool;
     size_t repl_backlog;
     size_t clients_slaves;
     size_t clients_normal;
@@ -1905,6 +1906,7 @@ size_t getSlaveKeyWithExpireCount(void);
 
 /* evict.c -- maxmemory handling and LRU eviction. */
 void evictionPoolAlloc(void);
+size_t evictionPoolUsage(void);
 #define LFU_INIT_VAL 5
 unsigned long LFUGetTimeInMinutes(void);
 uint8_t LFULogIncr(uint8_t value);

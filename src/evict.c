@@ -175,6 +175,20 @@ void evictionPoolAlloc(void) {
     EvictionPoolLRU = ep;
 }
 
+size_t evictionPoolUsage(void) {
+    struct evictionPoolEntry *pool = EvictionPoolLRU;
+    int j;
+    size_t usage = 0;
+
+    for (j = 0; j < EVPOOL_SIZE; j++) {
+        usage += sizeof(struct evictionPoolEntry);
+        usage += sdsAllocSize(pool[j].cached);
+        if (pool[j].key && pool[j].key != pool[j].cached)
+            usage += sdsAllocSize(pool[j].key);
+    }
+    return usage;
+}
+
 /* Remove the entry from the pool. */
 void removeEntryFromPool(struct evictionPoolEntry *pool, int i) {
     if (pool[i].key != pool[i].cached)

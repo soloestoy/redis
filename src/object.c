@@ -969,6 +969,9 @@ struct redisMemOverhead *getMemoryOverheadData(void) {
 
     mem_total += server.initial_memory_usage;
 
+    mh->evictionpool = evictionPoolUsage();
+    mem_total += mh->evictionpool;
+
     mem = 0;
     if (server.repl_backlog)
         mem += zmalloc_size(server.repl_backlog);
@@ -1315,7 +1318,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr,"stats") && c->argc == 2) {
         struct redisMemOverhead *mh = getMemoryOverheadData();
 
-        addReplyMultiBulkLen(c,(25+mh->num_dbs)*2);
+        addReplyMultiBulkLen(c,(26+mh->num_dbs)*2);
 
         addReplyBulkCString(c,"peak.allocated");
         addReplyLongLong(c,mh->peak_allocated);
@@ -1328,6 +1331,9 @@ void memoryCommand(client *c) {
 
         addReplyBulkCString(c,"replication.backlog");
         addReplyLongLong(c,mh->repl_backlog);
+
+        addReplyBulkCString(c,"eviction.pool");
+        addReplyLongLong(c,mh->evictionpool);
 
         addReplyBulkCString(c,"clients.slaves");
         addReplyLongLong(c,mh->clients_slaves);
