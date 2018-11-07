@@ -1521,6 +1521,10 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         if (remaining > 0 && remaining < readlen) readlen = remaining;
     }
 
+    if (c->flags & CLIENT_BLOCKED && sdslen(c->querybuf) > PROTO_INLINE_MAX_SIZE) {
+        readlen = 1;
+    }
+
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
