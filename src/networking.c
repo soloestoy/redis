@@ -667,7 +667,7 @@ void addReplyBulkSds(client *c, sds s)  {
 /* Add a C null term string as bulk reply */
 void addReplyBulkCString(client *c, const char *s) {
     if (s == NULL) {
-        addReply(c,shared.nullbulk);
+        addReplyNull(c);
     } else {
         addReplyBulkCBuffer(c,s,strlen(s));
     }
@@ -1979,7 +1979,7 @@ NULL
         if (c->name)
             addReplyBulk(c,c->name);
         else
-            addReply(c,shared.nullbulk);
+            addReplyNull(c);
     } else if (!strcasecmp(c->argv[1]->ptr,"pause") && c->argc == 3) {
         long long duration;
 
