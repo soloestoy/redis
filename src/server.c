@@ -2616,7 +2616,7 @@ int processCommand(client *c) {
      * the event loop since there is a busy Lua script running in timeout
      * condition, to avoid mixing the propagation of scripts with the propagation
      * of DELs due to eviction. */
-    if (server.maxmemory && !server.lua_timedout) {
+    if (server.maxmemory && !server.lua_timedout && !c->flags & CLIENT_SLAVE) {
         int out_of_memory = freeMemoryIfNeeded() == C_ERR;
         /* freeMemoryIfNeeded may flush slave output buffers. This may result
          * into a slave, that may be the active client, to be freed. */
