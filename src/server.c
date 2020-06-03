@@ -2435,6 +2435,9 @@ void initServerConfig(void) {
     server.zpopmaxCommand = lookupCommandByCString("zpopmax");
     server.sremCommand = lookupCommandByCString("srem");
     server.execCommand = lookupCommandByCString("exec");
+    server.setexCommand = lookupCommandByCString("setex");
+    server.psetexCommand = lookupCommandByCString("psetex");
+    server.setexatCommand = lookupCommandByCString("setexat");
     server.expireCommand = lookupCommandByCString("expire");
     server.pexpireCommand = lookupCommandByCString("pexpire");
     server.xclaimCommand = lookupCommandByCString("xclaim");

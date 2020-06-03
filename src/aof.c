@@ -548,25 +548,23 @@ sds catAppendOnlyGenericCommand(sds dst, int argc, robj **argv) {
  * 'seconds' as time to live and 'cmd' to understand what command
  * we are translating into a PEXPIREAT.
  *
- * This command is used in order to translate EXPIRE and PEXPIRE commands
+ * This command is used in order to translate EXPIRE EXPIREAT and PEXPIRE commands
  * into PEXPIREAT command so that we retain precision in the append only
  * file, and the time is always absolute and not relative. */
-sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, robj *seconds) {
+sds catAppendOnlyPexpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, robj *seconds) {
     long long when;
     robj *argv[3];
 
     /* Make sure we can use strtoll */
     seconds = getDecodedObject(seconds);
     when = strtoll(seconds->ptr,NULL,10);
-    /* Convert argument into milliseconds for EXPIRE, SETEX, EXPIREAT */
-    if (cmd->proc == expireCommand || cmd->proc == setexCommand ||
-        cmd->proc == expireatCommand)
+    /* Convert argument into milliseconds for EXPIRE, EXPIREAT */
+    if (cmd->proc == expireCommand || cmd->proc == expireatCommand)
     {
         when *= 1000;
     }
-    /* Convert into absolute time for EXPIRE, PEXPIRE, SETEX, PSETEX */
-    if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
-        cmd->proc == setexCommand || cmd->proc == psetexCommand)
+    /* Convert into absolute time for EXPIRE, PEXPIRE */
+    if (cmd->proc == expireCommand || cmd->proc == pexpireCommand)
     {
         when += mstime();
     }
@@ -581,9 +579,38 @@ sds catAppendOnlyExpireAtCommand(sds buf, struct redisCommand *cmd, robj *key, r
     return buf;
 }
 
+/* Translate SETEX SETEXAT and PSETEX commands to PSETEXAT */
+sds catAppendOnlyPsetexAtCommand(sds buf, struct redisCommand *cmd, robj *key, robj *seconds, robj *value) {
+    long long when;
+    robj *argv[4];
+
+    /* Make sure we can use strtoll */
+    seconds = getDecodedObject(seconds);
+    when = strtoll(seconds->ptr,NULL,10);
+    /* Convert argument into milliseconds for SETEX, SETEXAT */
+    if (cmd->proc == setexCommand || cmd->proc == setexatCommand)
+    {
+        when *= 1000;
+    }
+    /* Convert into absolute time for SETEX, PSETEX */
+    if (cmd->proc == setexCommand || cmd->proc == psetexCommand)
+    {
+        when += mstime();
+    }
+    decrRefCount(seconds);
+
+    argv[0] = createStringObject("PSETEXAT",8);
+    argv[1] = key;
+    argv[2] = createStringObjectFromLongLong(when);
+    argv[3] = value;
+    buf = catAppendOnlyGenericCommand(buf, 4, argv);
+    decrRefCount(argv[0]);
+    decrRefCount(argv[2]);
+    return buf;
+}
+
 void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int argc) {
     sds buf = sdsempty();
-    robj *tmpargv[3];
 
     /* The DB this command was targeting is not the same as the last command
      * we appended. To issue a SELECT command is needed. */
@@ -599,31 +626,32 @@ void feedAppendOnlyFile(struct redisCommand *cmd, int dictid, robj **argv, int a
     if (cmd->proc == expireCommand || cmd->proc == pexpireCommand ||
         cmd->proc == expireatCommand) {
         /* Translate EXPIRE/PEXPIRE/EXPIREAT into PEXPIREAT */
-        buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
-    } else if (cmd->proc == setexCommand || cmd->proc == psetexCommand) {
-        /* Translate SETEX/PSETEX to SET and PEXPIREAT */
-        tmpargv[0] = createStringObject("SET",3);
-        tmpargv[1] = argv[1];
-        tmpargv[2] = argv[3];
-        buf = catAppendOnlyGenericCommand(buf,3,tmpargv);
-        decrRefCount(tmpargv[0]);
-        buf = catAppendOnlyExpireAtCommand(buf,cmd,argv[1],argv[2]);
+        buf = catAppendOnlyPexpireAtCommand(buf,cmd,argv[1],argv[2]);
+    } else if (cmd->proc == setexCommand || cmd->proc == psetexCommand ||
+               cmd->proc == setexatCommand) {
+        /* Translate SETEX/PSETEX/SETEXAT to PSETEXAT */
+        buf = catAppendOnlyPsetexAtCommand(buf,cmd,argv[1],argv[2],argv[3]);
     } else if (cmd->proc == setCommand && argc > 3) {
         int i;
-        robj *exarg = NULL, *pxarg = NULL;
-        /* Translate SET [EX seconds][PX milliseconds] to SET and PEXPIREAT */
-        buf = catAppendOnlyGenericCommand(buf,3,argv);
+        robj *exarg = NULL, *pxarg = NULL, *exatarg = NULL;
+        /* Translate SET [EX seconds][PX milliseconds] [EXAT time] to PSETEXAT */
         for (i = 3; i < argc; i ++) {
             if (!strcasecmp(argv[i]->ptr, "ex")) exarg = argv[i+1];
             if (!strcasecmp(argv[i]->ptr, "px")) pxarg = argv[i+1];
+            if (!strcasecmp(argv[i]->ptr, "exat")) exatarg = argv[i+1];
         }
-        serverAssert(!(exarg && pxarg));
+        serverAssert(!(exarg && pxarg && exatarg));
         if (exarg)
-            buf = catAppendOnlyExpireAtCommand(buf,server.expireCommand,argv[1],
-                                               exarg);
+            buf = catAppendOnlyPsetexAtCommand(buf,server.setexCommand,argv[1],
+                                               exarg, argv[2]);
         if (pxarg)
-            buf = catAppendOnlyExpireAtCommand(buf,server.pexpireCommand,argv[1],
-                                               pxarg);
+            buf = catAppendOnlyPsetexAtCommand(buf,server.psetexCommand,argv[1],
+                                               pxarg, argv[2]);
+        if (exatarg)
+            buf = catAppendOnlyPsetexAtCommand(buf,server.setexatCommand,argv[1],
+                                               exatarg, argv[2]);
+	if (!exarg && !pxarg && !exatarg)
+            buf = catAppendOnlyGenericCommand(buf,argc,argv);
     } else {
         /* All the other commands don't need translation or need the
          * same translation already operated in the command vector
