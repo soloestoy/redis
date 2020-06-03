@@ -206,6 +206,14 @@ struct redisCommand redisCommandTable[] = {
      "write use-memory @string",
      0,NULL,1,1,1,0,0,0},
 
+    {"setexat",setexatCommand,4,
+     "write use-memory @string",
+     0,NULL,1,1,1,0,0,0},
+
+    {"psetexat",psetexatCommand,4,
+     "write use-memory @string",
+     0,NULL,1,1,1,0,0,0},
+
     {"append",appendCommand,3,
      "write use-memory fast @string",
      0,NULL,1,1,1,0,0,0},

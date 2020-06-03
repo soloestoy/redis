@@ -44,7 +44,7 @@ static int checkStringLength(client *c, long long size) {
 
 /* The setGenericCommand() function implements the SET operation with different
  * options and variants. This function is called in order to implement the
- * following commands: SET, SETEX, PSETEX, SETNX.
+ * following commands: SET, SETEX, PSETEX, SETEXAT, PSETEXAT, SETNX.
  *
  * 'flags' changes the behavior of the command (NX or XX, see below).
  *
@@ -63,19 +63,23 @@ static int checkStringLength(client *c, long long size) {
 #define OBJ_SET_XX (1<<1)          /* Set if key exists. */
 #define OBJ_SET_EX (1<<2)          /* Set if time in seconds is given */
 #define OBJ_SET_PX (1<<3)          /* Set if time in ms in given */
-#define OBJ_SET_KEEPTTL (1<<4)     /* Set and keep the ttl */
+#define OBJ_SET_EXAT (1<<4)        /* Set if absolute time in seconds is given */
+#define OBJ_SET_PXAT (1<<5)        /* Set if absolute time in ms in given */
+#define OBJ_SET_KEEPTTL (1<<6)     /* Set and keep the ttl */
 
-void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
-    long long milliseconds = 0; /* initialized to avoid any harmness warning */
+void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire, long long basetime, int unit, robj *ok_reply, robj *abort_reply) {
+    long long when = 0; /* initialized to avoid any harmness warning */
 
     if (expire) {
-        if (getLongLongFromObjectOrReply(c, expire, &milliseconds, NULL) != C_OK)
+        if (getLongLongFromObjectOrReply(c, expire, &when, NULL) != C_OK)
             return;
-        if (milliseconds <= 0) {
+        if (!server.loading && !server.masterhost &&
+            (when <= 0 || (basetime == 0 && when <= mstime()))) {
             addReplyErrorFormat(c,"invalid expire time in %s",c->cmd->name);
             return;
         }
-        if (unit == UNIT_SECONDS) milliseconds *= 1000;
+        if (unit == UNIT_SECONDS) when *= 1000;
+        when += basetime;
     }
 
     if ((flags & OBJ_SET_NX && lookupKeyWrite(c->db,key) != NULL) ||
@@ -86,17 +90,18 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
     }
     genericSetKey(c,c->db,key,val,flags & OBJ_SET_KEEPTTL,1);
     server.dirty++;
-    if (expire) setExpire(c,c->db,key,mstime()+milliseconds);
+    if (expire) setExpire(c,c->db,key,when);
     notifyKeyspaceEvent(NOTIFY_STRING,"set",key,c->db->id);
     if (expire) notifyKeyspaceEvent(NOTIFY_GENERIC,
         "expire",key,c->db->id);
     addReply(c, ok_reply ? ok_reply : shared.ok);
 }
 
-/* SET key value [NX] [XX] [KEEPTTL] [EX <seconds>] [PX <milliseconds>] */
+/* SET key value [NX] [XX] [KEEPTTL] [EX <seconds>] [PX <milliseconds>] [EXAT <time>] [PXAT <ms_time>] */
 void setCommand(client *c) {
     int j;
     robj *expire = NULL;
+    long long basetime = 0;
     int unit = UNIT_SECONDS;
     int flags = OBJ_SET_NO_FLAGS;
 
@@ -115,24 +120,51 @@ void setCommand(client *c) {
         {
             flags |= OBJ_SET_XX;
         } else if (!strcasecmp(c->argv[j]->ptr,"KEEPTTL") &&
-                   !(flags & OBJ_SET_EX) && !(flags & OBJ_SET_PX))
+                   !(flags & OBJ_SET_EX) && !(flags & OBJ_SET_PX) &&
+                   !(flags & OBJ_SET_EXAT) && !(flags & OBJ_SET_PXAT))
         {
             flags |= OBJ_SET_KEEPTTL;
         } else if ((a[0] == 'e' || a[0] == 'E') &&
                    (a[1] == 'x' || a[1] == 'X') && a[2] == '\0' &&
                    !(flags & OBJ_SET_KEEPTTL) &&
+                   !(flags & OBJ_SET_EXAT) &&
+                   !(flags & OBJ_SET_PXAT) &&
                    !(flags & OBJ_SET_PX) && next)
         {
             flags |= OBJ_SET_EX;
             unit = UNIT_SECONDS;
             expire = next;
+            basetime = mstime();
             j++;
         } else if ((a[0] == 'p' || a[0] == 'P') &&
                    (a[1] == 'x' || a[1] == 'X') && a[2] == '\0' &&
                    !(flags & OBJ_SET_KEEPTTL) &&
+                   !(flags & OBJ_SET_EXAT) &&
+                   !(flags & OBJ_SET_PXAT) &&
                    !(flags & OBJ_SET_EX) && next)
         {
             flags |= OBJ_SET_PX;
+            unit = UNIT_MILLISECONDS;
+            expire = next;
+            basetime = mstime();
+            j++;
+        } else if (!strcasecmp(c->argv[j]->ptr,"EXAT") &&
+                   !(flags & OBJ_SET_KEEPTTL) &&
+                   !(flags & OBJ_SET_EX) &&
+                   !(flags & OBJ_SET_PX) &&
+                   !(flags & OBJ_SET_PXAT) && next)
+        {
+            flags |= OBJ_SET_EXAT;
+            unit = UNIT_SECONDS;
+            expire = next;
+            j++;
+        } else if (!strcasecmp(c->argv[j]->ptr,"PXAT") &&
+                   !(flags & OBJ_SET_KEEPTTL) &&
+                   !(flags & OBJ_SET_EX) &&
+                   !(flags & OBJ_SET_PX) &&
+                   !(flags & OBJ_SET_EXAT) && next)
+        {
+            flags |= OBJ_SET_PXAT;
             unit = UNIT_MILLISECONDS;
             expire = next;
             j++;
@@ -143,22 +175,32 @@ void setCommand(client *c) {
     }
 
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
+    setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,basetime,unit,NULL,NULL);
 }
 
 void setnxCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c,OBJ_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
+    setGenericCommand(c,OBJ_SET_NX,c->argv[1],c->argv[2],NULL,0,0,shared.cone,shared.czero);
 }
 
 void setexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
+    setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],mstime(),UNIT_SECONDS,NULL,NULL);
 }
 
 void psetexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
+    setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],mstime(),UNIT_MILLISECONDS,NULL,NULL);
+}
+
+void setexatCommand(client *c) {
+    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],0,UNIT_SECONDS,NULL,NULL);
+}
+
+void psetexatCommand(client *c) {
+    c->argv[3] = tryObjectEncoding(c->argv[3]);
+    setGenericCommand(c,OBJ_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],0,UNIT_MILLISECONDS,NULL,NULL);
 }
 
 int getGenericCommand(client *c) {
